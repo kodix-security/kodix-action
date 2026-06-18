@@ -81,6 +81,8 @@ runs:
           # Web / JavaScript ecosystem
           '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
           '.vue', '.svelte', '.astro',
+          # HTML / Templates
+          '.html', '.htm', '.ejs', '.pug', '.hbs', '.handlebars', '.njk', '.twig', '.jinja', '.jinja2', '.blade.php',
           # Python
           '.py', '.pyw', '.pyi',
           # Go
