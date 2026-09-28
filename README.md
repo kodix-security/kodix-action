@@ -1,7 +1,7 @@
 # 🛡️ Kodix Security Scanner GitHub Action
 
 > **AI-consensus code security scanner.**
-> Runs OpenAI, Anthropic Claude, and Google Gemini on your code simultaneously.
+> Runs multiple Hyper Engine options on your code simultaneously.
 > Only vulnerabilities confirmed by **2 or more models** are surfaced ~95% fewer false positives.
 
 ---
@@ -116,8 +116,8 @@ The action streams a live, structured log in three phases:
   │  Only findings confirmed by 2+ models will be reported.
   ├────────────────────────────────────────────────────────────────
   │  [10:42:14] scanning
-  │  claude: [████████████░░░░░░░░]  60%   gemini: [██████████████░░░░░░]  70%   openai: [██████░░░░░░░░░░░░░░]  30%   22s
-  │  claude: [████████████████████] 100%   gemini: [████████████████████] 100%   openai: [████████████████████] 100%   67s
+  │  hyper-1: [████████████░░░░░░░░]  60%   hyper-2: [██████████████░░░░░░]  70%   hyper-3: [██████░░░░░░░░░░░░░░]  30%   22s
+  │  hyper-1: [████████████████████] 100%   hyper-2: [████████████████████] 100%   hyper-3: [████████████████████] 100%   67s
   │  [10:43:08] scanning → completed
   ├────────────────────────────────────────────────────────────────
   │  ✓ All models finished in 67s
@@ -142,7 +142,7 @@ The action streams a live, structured log in three phases:
   │  Line    : 47
   │  Title   : SQL Injection via string concatenation
   │  Details : User-controlled input concatenated directly into SQL.
-  │  Models  : openai, claude, gemini
+  │  Models  : hyper-1, hyper-2, hyper-3
   │    const q = "SELECT * FROM users WHERE id=" + userId;
   └────────────────────────────────────────────────────────────────
 
@@ -213,7 +213,7 @@ Action collects all readable files (FULL or DIFF mode)
    ↓
 Files sent to Kodix API with your api_key
    ↓
-3 AI models scan in parallel (OpenAI + Claude + Gemini)
+3 Hyper Engine options scan in parallel (Hyper 1 + Hyper 2 + Hyper 3)
    ↓
 Consensus engine: only findings confirmed by 2+ models surface
    ↓
