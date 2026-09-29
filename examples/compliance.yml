@@ -1,0 +1,31 @@
+name: Kodix Security + Compliance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  kodix:
+    name: 🛡️ Kodix security + compliance check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Upload your standards once at kodixsecurity.com → Profile → Compliance.
+      # code_scan defaults to true; set it to false for a compliance-only run.
+      - name: Run Kodix
+        id: kodix
+        uses: kodix-security/kodix-action@v1
+        with:
+          api_key: ${{ secrets.KODIX_API_KEY }}
+          compliance_scan: true
+
+      - name: Show results
+        if: always()
+        run: |
+          echo "Security   : ${{ steps.kodix.outputs.consensus_score }}/100"
+          echo "Compliance : ${{ steps.kodix.outputs.compliance_score }}/100"
+          echo "Compliance report: ${{ steps.kodix.outputs.compliance_pdf_url }}"

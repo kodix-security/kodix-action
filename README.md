@@ -38,6 +38,10 @@ That's it. Add `KODIX_API_KEY` to **Settings → Secrets → Actions** and every
 |-------|----------|---------|-------------|
 | `api_key` | **Yes** | — | Your Kodix API key. Always pass via `${{ secrets.KODIX_API_KEY }}` |
 | `mode` | No | `full` | `full` scan every source file. `diff` scan only files changed in this push/PR |
+| `code_scan` | No | `true` | Security check of your code. Set to `false` to run only the compliance check |
+| `compliance_scan` | No | `false` | Also check your code against the compliance documents uploaded in your Kodix profile (see [Compliance Scans](#compliance-scans)) |
+
+At least one of `code_scan` / `compliance_scan` must be `true`; if both are `false` the action stops with an error before scanning anything.
 
 No other configuration needed. The action:
 - Scans **all readable text files** no extension filters, no file-size limits, no line-count caps
@@ -57,7 +61,12 @@ No other configuration needed. The action:
 | `medium_count` | MEDIUM severity count | `1` |
 | `low_count` | LOW severity count | `0` |
 | `consensus_score` | Security score 0–100 | `62` |
-| `pdf_url` | URL of the full PDF report | `https://storage…` |
+| `pdf_url` | URL of the full PDF security report (empty when `code_scan` is `false`) | `https://storage…` |
+| `scan_type` | What this scan checked: `code`, `compliance` or `both` | `both` |
+| `compliance_findings_count` | Total compliance violations | `6` |
+| `compliance_critical_count` / `_high_` / `_medium_` / `_low_` | Compliance violations by severity | `0` |
+| `compliance_score` | Compliance score 0–100 | `78` |
+| `compliance_pdf_url` | URL of the full PDF compliance report | `https://storage…` |
 
 Use outputs in subsequent steps:
 
@@ -169,6 +178,44 @@ The action streams a live, structured log in three phases:
 
 ---
 
+## Compliance Scans
+
+Besides looking for vulnerabilities, Kodix can check your code against **your own standards** (coding guidelines, style guides, internal policies).
+
+1. Upload your documents once at **kodixsecurity.com → Profile → Compliance** (PDF, DOCX, TXT, MD, or pasted text — up to 10 documents, 5 MB each, 100,000 characters in total).
+2. Turn the check on:
+
+```yaml
+# compliance only
+- uses: kodix-security/kodix-action@v1
+  with:
+    api_key: ${{ secrets.KODIX_API_KEY }}
+    code_scan: false
+    compliance_scan: true
+
+# security + compliance (two separate PDF reports)
+- uses: kodix-security/kodix-action@v1
+  with:
+    api_key: ${{ secrets.KODIX_API_KEY }}
+    compliance_scan: true
+```
+
+| `code_scan` | `compliance_scan` | What runs |
+|-------------|-------------------|-----------|
+| `true` (default) | `false` (default) | Security check only — unchanged behaviour |
+| `false` | `true` | Compliance check only |
+| `true` | `true` | Both, with one PDF report each |
+| `false` | `false` | **Rejected** — at least one must be on |
+
+- **All** documents in your account are used for every compliance scan (there is no UI in CI, so nothing to pick).
+- If `compliance_scan` is on but you have not uploaded any documents, the action fails before scanning and nothing is charged.
+- Unlike security findings (which need 2+ engines to agree), **every** compliance violation reported by any engine is included; the same rule at the same place reported by several engines is merged into one entry.
+- Pricing: same formula as a security scan with the size of your documents included; when you run both checks their costs are combined into a single charge.
+- After the scan you can **chat about the compliance report** on the dashboard (each answer costs at least 1 token).
+- **Server first:** the compliance options need the current Kodix backend; releasing this action version before the backend is live makes `compliance_scan` a no-op on the server.
+
+---
+
 ## Error Handling
 
 The action exits with a **non-zero code** (failing the build) only for operational errors:
@@ -201,6 +248,7 @@ Vulnerability findings regardless of severity **never** cause the action to fail
 |------|-------------|
 | [`examples/basic.yml`](examples/basic.yml) | Minimal push to main |
 | [`examples/diff-only.yml`](examples/diff-only.yml) | Diff mode for feature branches |
+| [`examples/compliance.yml`](examples/compliance.yml) | Security + compliance check |
 
 ---
 
@@ -215,11 +263,12 @@ Files sent to Kodix API with your api_key
    ↓
 3 Hyper Engine options scan in parallel (Hyper 1 + Hyper 2 + Hyper 3)
    ↓
-Consensus engine: only findings confirmed by 2+ models surface
+Security: only findings confirmed by 2+ models surface
+   Compliance (optional): every violation of your uploaded standards is reported
    ↓
 Live progress bars → results table in terminal
    ↓
-Outputs written (scan_id, score, counts, pdf_url)
+Outputs written (scan_id, scan_type, score, counts, pdf_url, compliance_* …)
 ```
 
 ---

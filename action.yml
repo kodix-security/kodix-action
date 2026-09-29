@@ -1,5 +1,5 @@
 name: 'Kodix Security Scanner'
-description: 'AI-consensus code security scanner'
+description: 'AI-consensus code security and compliance scanner'
 author: 'Kodix Security <gabi@kodixsecurity.com>'
 version: '1'  # ← Add this line
 
@@ -15,6 +15,14 @@ inputs:
     description: 'Scan mode: "full" scans every source file, "diff" scans only files changed in this push/PR'
     required: false
     default: 'full'
+  code_scan:
+    description: 'Run the security check on your code ("true" or "false"). Default: true'
+    required: false
+    default: 'true'
+  compliance_scan:
+    description: 'Also check your code against the compliance documents uploaded in your Kodix profile ("true" or "false"). Default: false. At least one of code_scan / compliance_scan must be true.'
+    required: false
+    default: 'false'
 
 outputs:
   scan_id:
@@ -39,8 +47,32 @@ outputs:
     description: 'Security score from 0 (worst) to 100 (best)'
     value: ${{ steps.kodix-run.outputs.consensus_score }}
   pdf_url:
-    description: 'URL to download the full PDF security report'
+    description: 'URL to download the full PDF security report (empty when code_scan is false)'
     value: ${{ steps.kodix-run.outputs.pdf_url }}
+  scan_type:
+    description: 'What this scan checked: code, compliance or both'
+    value: ${{ steps.kodix-run.outputs.scan_type }}
+  compliance_findings_count:
+    description: 'Total number of compliance violations found'
+    value: ${{ steps.kodix-run.outputs.compliance_findings_count }}
+  compliance_critical_count:
+    description: 'Number of CRITICAL compliance violations'
+    value: ${{ steps.kodix-run.outputs.compliance_critical_count }}
+  compliance_high_count:
+    description: 'Number of HIGH compliance violations'
+    value: ${{ steps.kodix-run.outputs.compliance_high_count }}
+  compliance_medium_count:
+    description: 'Number of MEDIUM compliance violations'
+    value: ${{ steps.kodix-run.outputs.compliance_medium_count }}
+  compliance_low_count:
+    description: 'Number of LOW compliance violations'
+    value: ${{ steps.kodix-run.outputs.compliance_low_count }}
+  compliance_score:
+    description: 'Compliance score from 0 (worst) to 100 (best)'
+    value: ${{ steps.kodix-run.outputs.compliance_score }}
+  compliance_pdf_url:
+    description: 'URL to download the full PDF compliance report'
+    value: ${{ steps.kodix-run.outputs.compliance_pdf_url }}
 
 runs:
   using: 'composite'
@@ -56,6 +88,26 @@ runs:
         import os, json, sys, time
 
         mode       = os.environ.get('INPUT_MODE', 'full').lower()
+
+        # ── What to check: security and/or compliance (at least one) ────────
+        def read_flag(name, default):
+            raw = (os.environ.get(name, '') or '').strip().lower()
+            if raw == '':
+                return default
+            if raw in ('true', '1', 'yes'):
+                return True
+            if raw in ('false', '0', 'no'):
+                return False
+            print(f'\n  ✗ ERROR: {name.replace("INPUT_", "").lower()} must be "true" or "false" (got "{raw}").')
+            sys.exit(1)
+
+        code_scan       = read_flag('INPUT_CODE_SCAN', True)
+        compliance_scan = read_flag('INPUT_COMPLIANCE_SCAN', False)
+        if not code_scan and not compliance_scan:
+            print('\n  ✗ ERROR: code_scan and compliance_scan are both "false".')
+            print('  At least one of them must be "true". Nothing to do.')
+            sys.exit(1)
+
         event_name = os.environ.get('GITHUB_EVENT_NAME', '')
         repo_name  = os.environ.get('GITHUB_REPOSITORY', 'unknown')
         branch     = os.environ.get('GITHUB_REF_NAME', 'unknown')
@@ -299,6 +351,8 @@ runs:
             'commit_sha':          commit_sha,
             'commit_author_email': actor,
             'scan_mode':           mode.upper(),
+            'code_scan':           code_scan,
+            'compliance_scan':     compliance_scan,
             'files':               files,
         }
 
@@ -308,6 +362,8 @@ runs:
         print(f'  ✓ Payload ready {len(files)} file(s) queued for AI scanning\n')
       env:
         INPUT_MODE: ${{ inputs.mode }}
+        INPUT_CODE_SCAN: ${{ inputs.code_scan }}
+        INPUT_COMPLIANCE_SCAN: ${{ inputs.compliance_scan }}
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 2 Submit to Kodix, poll for results, render full terminal report
@@ -386,6 +442,12 @@ runs:
                 print(f'  Shortage : {err.get("shortage", "?")} tokens')
                 print(f'  Purchase : kodixsecurity.com/tokens')
                 sys.exit(1)
+            elif e.code == 400 and err.get('code') == 'no_compliance_documents':
+                print('\n  ✗ NO COMPLIANCE DOCUMENTS')
+                print('  compliance_scan is "true" but your account has no compliance documents yet.')
+                print('  Upload your standards at: kodixsecurity.com/profile?tab=compliance')
+                print('  (or set compliance_scan to "false").')
+                sys.exit(1)
             elif e.code == 429:
                 print('\n  ✗ RATE LIMIT too many requests.')
                 print('  Wait a few minutes and retry the workflow.')
@@ -401,10 +463,16 @@ runs:
 
         scan_id        = trigger_data['scan_id']
         tokens_charged = trigger_data.get('tokens_charged', '?')
+        # Older servers do not report scan_type; they only ever ran the security check.
+        scan_type      = trigger_data.get('scan_type') or 'code'
+        has_code       = scan_type != 'compliance'
+        has_comp       = scan_type != 'code'
 
         print(f'  │')
         print(f'  │  ✓ Scan accepted by API')
         print(f'  │  Scan ID        : {scan_id}')
+        if scan_type != 'code':
+            print(f'  │  Checks         : {"security + compliance" if scan_type == "both" else "compliance"}')
         print(f'  │  Tokens charged : {tokens_charged}')
         print(f'  └{"─"*64}\n')
 
@@ -432,7 +500,10 @@ runs:
         print(f'  │  SCAN IN PROGRESS')
         print(f'  ├{"─"*64}')
         print(f'  │  3 AI models are scanning your code in parallel.')
-        print(f'  │  Only findings confirmed by 2+ models will be reported.')
+        if has_code:
+            print(f'  │  Security: only findings confirmed by 2+ models will be reported.')
+        if has_comp:
+            print(f'  │  Compliance: every violation of your standards reported by a model is included.')
         print(f'  │  Estimated time : {est_label} for {file_count} file(s).')
         print(f'  │  The scan runs in the background — this workflow will wait.')
         print(f'  ├{"─"*64}')
@@ -504,11 +575,13 @@ runs:
             scan_data = poll.get('scan', {})
             status    = scan_data.get('status', 'unknown')
             progress  = scan_data.get('progress', {})
+            comp_progress = scan_data.get('compliance_progress', {}) or {}
 
             # ── Stale detection ──────────────────────────────────────────────
             # Track a fingerprint of status+progress. If it hasn't changed for
             # STALE_SECONDS the backend is likely stuck, not just slow.
-            change_sig = status + json.dumps(sorted(progress.items()) if progress else [], sort_keys=True)
+            change_sig = status + json.dumps(sorted(progress.items()) if progress else [], sort_keys=True) \
+                       + json.dumps(sorted(comp_progress.items()) if comp_progress else [], sort_keys=True)
             if change_sig != last_change_sig:
                 last_change_sig  = change_sig
                 last_change_time = time.time()
@@ -547,10 +620,12 @@ runs:
             if stale_for > 120:
                 print(f'  │  ⚠  No change for {fmt_time(stale_for)} — still waiting…', flush=True)
 
-            # ── Per-model progress bars ──────────────────────────────────────
-            if progress:
-                for model_name in sorted(progress.keys()):
-                    v    = progress[model_name]
+            # ── Per-model progress bars (one block per check) ────────────────
+            def print_bars(bars, label=None):
+                if label:
+                    print(f'  │  ── {label}', flush=True)
+                for model_name in sorted(bars.keys()):
+                    v    = bars[model_name]
                     pct  = v.get('pct', 0) if isinstance(v, dict) else int(v)
                     stat = v.get('status', 'scanning') if isinstance(v, dict) else 'scanning'
                     done = stat in ('done', 'completed') or pct >= 100
@@ -559,6 +634,12 @@ runs:
                     m_icon   = '✓' if done else spin
                     m_label  = 'done   ' if done else 'scanning'
                     print(f'  │  {m_icon}  {model_name:<10}  [{m_bar}]  {pct:3d}%  {m_label}', flush=True)
+
+            if progress or comp_progress:
+                if progress:
+                    print_bars(progress, 'Security check' if scan_type == 'both' else None)
+                if comp_progress:
+                    print_bars(comp_progress, 'Compliance check' if scan_type == 'both' else None)
             else:
                 print(f'  │  {spin}  Initializing AI models…', flush=True)
 
@@ -588,86 +669,99 @@ runs:
             time.sleep(poll_interval)
 
         # ── Render results ────────────────────────────────────────────────
-        findings      = scan_data.get('findings', [])
-        score         = scan_data.get('consensus_score', 0)
-        sev_breakdown = scan_data.get('severity_breakdown', {})
-        pdf_url       = scan_data.get('pdf_url', '')
+        def render(kind, findings, score, sev_breakdown, pdf_url):
+            is_comp    = kind == 'compliance'
+            n_total    = len(findings)
+            grade      = 'A+' if score >= 95 else 'A' if score >= 90 else 'B' if score >= 75 else 'C' if score >= 60 else 'D' if score >= 40 else 'F'
+            score_icon = '🟢' if score >= 75 else '🟡' if score >= 50 else '🔴'
 
-        n_critical = sev_breakdown.get('critical', 0)
-        n_high     = sev_breakdown.get('high', 0)
-        n_medium   = sev_breakdown.get('medium', 0)
-        n_low      = sev_breakdown.get('low', 0)
-        n_total    = len(findings)
-
-        grade      = 'A+' if score >= 95 else 'A' if score >= 90 else 'B' if score >= 75 else 'C' if score >= 60 else 'D' if score >= 40 else 'F'
-        score_icon = '🟢' if score >= 75 else '🟡' if score >= 50 else '🔴'
-
-        print(f'{"═"*68}')
-        print(f'  🛡️  KODIX SECURITY SCAN RESULTS')
-        print(f'{"═"*68}')
-        print(f'  Scan ID   : {scan_id}')
-        print(f'  Score     : {score_icon} {score}/100  (Grade: {grade})')
-        print(f'  Findings  : {n_total} confirmed vulnerability(ies)')
-        print(f'{"─"*68}')
-        print(f'  {"Severity":<12}  {"Count":>5}  {"Visual bar"}')
-        print(f'  {"─"*12}  {"─"*5}  {"─"*40}')
-
-        for sev in SEVERITY_ORDER:
-            count = sev_breakdown.get(sev, 0)
-            bar   = '█' * min(count, 40) if count > 0 else '—'
-            icon  = SEVERITY_ICONS.get(sev, '⚪')
-            print(f'  {icon} {sev.upper():<10}  {count:>5}  {bar}')
-
-        print(f'{"═"*68}')
-
-        if findings:
-            print(f'\n  VULNERABILITY DETAILS  ({n_total} finding(s))')
+            print(f'{"═"*68}')
+            print(f'  {"📑  KODIX COMPLIANCE RESULTS" if is_comp else "🛡️  KODIX SECURITY SCAN RESULTS"}')
+            print(f'{"═"*68}')
+            print(f'  Scan ID   : {scan_id}')
+            print(f'  Score     : {score_icon} {score}/100  (Grade: {grade})')
+            print(f'  {"Violations" if is_comp else "Findings  "}: {n_total} {"violation(s) of your standards" if is_comp else "confirmed vulnerability(ies)"}')
             print(f'{"─"*68}')
+            print(f'  {"Severity":<12}  {"Count":>5}  {"Visual bar"}')
+            print(f'  {"─"*12}  {"─"*5}  {"─"*40}')
 
-            for i, finding in enumerate(findings, 1):
-                sev       = (finding.get('severity') or 'low').lower()
-                icon      = SEVERITY_ICONS.get(sev, '⚪')
-                sev_upper = sev.upper()
-                fname     = (finding.get('file_name') or finding.get('fileName') or 'unknown file')
-                if len(fname) > 52: fname = '…' + fname[-50:]
-                line      = finding.get('line_number') or finding.get('lineNumber') or '?'
-                title     = (finding.get('title') or 'Untitled finding')
-                confirmed = finding.get('confirmed_by') or finding.get('confirmedBy') or []
-                models_str = ', '.join(confirmed) if confirmed else 'unknown'
-                description = (finding.get('description') or '').strip()
+            for sev in SEVERITY_ORDER:
+                count = sev_breakdown.get(sev, 0)
+                bar   = '█' * min(count, 40) if count > 0 else '—'
+                icon  = SEVERITY_ICONS.get(sev, '⚪')
+                print(f'  {icon} {sev.upper():<10}  {count:>5}  {bar}')
 
-                print(f'\n  ┌─ [{i}/{n_total}] {icon} {sev_upper}')
-                print(f'  │  File    : {fname}')
-                print(f'  │  Line    : {line}')
-                print(f'  │  Title   : {title}')
-                if description:
-                    # Wrap long descriptions at 60 chars
-                    words = description.split()
-                    line_buf, lines_out = [], []
-                    for w in words:
-                        if sum(len(x)+1 for x in line_buf) + len(w) > 60:
-                            lines_out.append(' '.join(line_buf))
-                            line_buf = [w]
-                        else:
-                            line_buf.append(w)
-                    if line_buf: lines_out.append(' '.join(line_buf))
-                    print(f'  │  Details : {lines_out[0]}')
-                    for extra_line in lines_out[1:]:
-                        print(f'  │            {extra_line}')
-                print(f'  │  Models  : {models_str}')
+            print(f'{"═"*68}')
 
-                ctx = (finding.get('code_context') or finding.get('codeContext') or '').strip()
-                if ctx:
-                    print(f'  │')
-                    for code_line in ctx.split('\n')[:6]:
-                        print(f'  │    {code_line[:64]}')
+            if findings:
+                print(f'\n  {"VIOLATION" if is_comp else "VULNERABILITY"} DETAILS  ({n_total} finding(s))')
+                print(f'{"─"*68}')
 
-                print(f'  └{"─"*64}')
+                for i, finding in enumerate(findings, 1):
+                    sev       = (finding.get('severity') or 'low').lower()
+                    icon      = SEVERITY_ICONS.get(sev, '⚪')
+                    sev_upper = sev.upper()
+                    fname     = (finding.get('file_name') or finding.get('fileName') or 'unknown file')
+                    if len(fname) > 52: fname = '…' + fname[-50:]
+                    line      = finding.get('line_number') or finding.get('lineNumber') or '?'
+                    title     = (finding.get('title') or 'Untitled finding')
+                    confirmed = finding.get('confirmed_by') or finding.get('confirmedBy') or []
+                    models_str = ', '.join(confirmed) if confirmed else 'unknown'
+                    description = (finding.get('description') or '').strip()
 
-        print(f'\n{"─"*68}')
-        if pdf_url:
-            print(f'  📄 Full PDF report  : {pdf_url}')
+                    print(f'\n  ┌─ [{i}/{n_total}] {icon} {sev_upper}')
+                    print(f'  │  File    : {fname}')
+                    print(f'  │  Line    : {line}')
+                    print(f'  │  Title   : {title}')
+                    if is_comp and finding.get('standard_reference'):
+                        print(f'  │  Standard: {str(finding["standard_reference"])[:120]}')
+                    if description:
+                        # Wrap long descriptions at 60 chars
+                        words = description.split()
+                        line_buf, lines_out = [], []
+                        for w in words:
+                            if sum(len(x)+1 for x in line_buf) + len(w) > 60:
+                                lines_out.append(' '.join(line_buf))
+                                line_buf = [w]
+                            else:
+                                line_buf.append(w)
+                        if line_buf: lines_out.append(' '.join(line_buf))
+                        print(f'  │  Details : {lines_out[0]}')
+                        for extra_line in lines_out[1:]:
+                            print(f'  │            {extra_line}')
+                    print(f'  │  {"Reported by" if is_comp else "Models  "}: {models_str}')
+
+                    ctx = (finding.get('code_context') or finding.get('codeContext') or '').strip()
+                    if ctx:
+                        print(f'  │')
+                        for code_line in ctx.split('\n')[:6]:
+                            print(f'  │    {code_line[:64]}')
+
+                    print(f'  └{"─"*64}')
+
+            print(f'\n{"─"*68}')
+            if pdf_url:
+                print(f'  📄 Full PDF {"compliance " if is_comp else ""}report  : {pdf_url}')
+
+        # security check (older servers only ever return this)
+        sec_findings  = scan_data.get('findings', []) if has_code else []
+        sec_score     = scan_data.get('consensus_score') or 0
+        sec_breakdown = (scan_data.get('severity_breakdown') or {}) if has_code else {}
+        pdf_url       = (scan_data.get('pdf_url') or '') if has_code else ''
+        # compliance check
+        comp_findings  = scan_data.get('compliance_findings', []) if has_comp else []
+        comp_score     = scan_data.get('compliance_score') or 0
+        comp_breakdown = (scan_data.get('compliance_severity') or {}) if has_comp else {}
+        comp_pdf_url   = (scan_data.get('compliance_pdf_url') or '') if has_comp else ''
+
+        if has_code:
+            render('security', sec_findings, sec_score, sec_breakdown, pdf_url)
+        if has_comp:
+            render('compliance', comp_findings, comp_score, comp_breakdown, comp_pdf_url)
+
         print(f'  🌐 Dashboard        : https://kodixsecurity.com/scan/{scan_id}')
+        if has_comp:
+            print(f'  💬 Ask about the compliance report: https://kodixsecurity.com/scan/{scan_id}/chat')
         print(f'{"═"*68}')
         print(f'  ✓ Kodix scan complete!\n')
 
@@ -676,12 +770,20 @@ runs:
         if gho:
             with open(gho, 'a') as fh:
                 fh.write(f'scan_id={scan_id}\n')
-                fh.write(f'findings_count={n_total}\n')
-                fh.write(f'critical_count={n_critical}\n')
-                fh.write(f'high_count={n_high}\n')
-                fh.write(f'medium_count={n_medium}\n')
-                fh.write(f'low_count={n_low}\n')
-                fh.write(f'consensus_score={score}\n')
+                fh.write(f'scan_type={scan_type}\n')
+                fh.write(f'findings_count={len(sec_findings)}\n')
+                fh.write(f'critical_count={sec_breakdown.get("critical", 0)}\n')
+                fh.write(f'high_count={sec_breakdown.get("high", 0)}\n')
+                fh.write(f'medium_count={sec_breakdown.get("medium", 0)}\n')
+                fh.write(f'low_count={sec_breakdown.get("low", 0)}\n')
+                fh.write(f'consensus_score={sec_score if has_code else ""}\n')
                 fh.write(f'pdf_url={pdf_url}\n')
+                fh.write(f'compliance_findings_count={len(comp_findings)}\n')
+                fh.write(f'compliance_critical_count={comp_breakdown.get("critical", 0)}\n')
+                fh.write(f'compliance_high_count={comp_breakdown.get("high", 0)}\n')
+                fh.write(f'compliance_medium_count={comp_breakdown.get("medium", 0)}\n')
+                fh.write(f'compliance_low_count={comp_breakdown.get("low", 0)}\n')
+                fh.write(f'compliance_score={comp_score if has_comp else ""}\n')
+                fh.write(f'compliance_pdf_url={comp_pdf_url}\n')
       env:
         INPUT_API_KEY: ${{ inputs.api_key }}
